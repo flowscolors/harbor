@@ -490,6 +490,7 @@
         "SIMPLE": "简单检索",
         "ITEMS": "条记录",
         "RESULT": "Success",
+        "SOURCE_IP": "来源 IP",
         "FILTER_PLACEHOLDER": "过滤日志",
         "INVALID_DATE": "无效日期。",
         "OF": "共计",

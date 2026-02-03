@@ -490,6 +490,7 @@
         "SIMPLE": "Simple",
         "ITEMS": "items",
         "RESULT": "Success",
+        "SOURCE_IP": "Source IP",
         "FILTER_PLACEHOLDER": "Filter Logs",
         "INVALID_DATE": "Invalid date.",
         "OF": "of",

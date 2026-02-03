@@ -173,6 +173,7 @@ func convertToModelAuditLogExt(logs []*model.AuditLogExt) []*models.AuditLogExt 
 			OperationDescription: log.OperationDescription,
 			OperationResult:      log.IsSuccessful,
 			OpTime:               strfmt.DateTime(log.OpTime),
+			SourceIP:             log.SourceIP,
 		})
 	}
 	return auditLogs

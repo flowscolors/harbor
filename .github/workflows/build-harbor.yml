@@ -1,0 +1,188 @@
+name: "Build Harbor"
+
+on:
+  workflow_dispatch:
+    inputs:
+      build_type:
+        description: 'Build type'
+        required: false
+        default: 'all'
+        type: choice
+        options:
+          - all
+          - compile
+          - package
+          - test
+      go_version:
+        description: 'Go version'
+        required: false
+        default: '1.23'
+        type: string
+      skip_tests:
+        description: 'Skip unit tests'
+        required: false
+        default: 'false'
+        type: choice
+        options:
+          - 'true'
+          - 'false'
+
+env:
+  DOCKER_COMPOSE_VERSION: 1.23.0
+  BUILD_TYPE: ${{ github.event.inputs.build_type || 'all' }}
+  SKIP_TESTS: ${{ github.event.inputs.skip_tests || 'false' }}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          path: src/github.com/goharbor/harbor
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ github.event.inputs.go_version || '1.23' }}
+          cache: true
+          cache-dependency-path: src/github.com/goharbor/harbor/src/go.mod
+
+      - name: Setup Docker
+        uses: docker-practice/actions-setup-docker@master
+        with:
+          docker_version: 24.0
+          docker_channel: stable
+
+      - name: Login to Docker Hub
+        if: env.BUILD_TYPE == 'all' || env.BUILD_TYPE == 'package'
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_HUB_USERNAME }}
+          password: ${{ secrets.DOCKER_HUB_PASSWORD }}
+
+      - name: Cache Go modules
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: ${{ runner.os }}-go-${{ hashFiles('src/github.com/goharbor/harbor/src/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-
+
+      - name: Install dependencies
+        run: |
+          cd src/github.com/goharbor/harbor/src
+          go mod download
+          go install github.com/golang/mock/mockgen@v1.6.0
+
+      - name: Generate mocks
+        if: env.SKIP_TESTS != 'true'
+        run: |
+          cd src/github.com/goharbor/harbor/src
+          go generate ./...
+
+      - name: Run unit tests
+        if: env.SKIP_TESTS != 'true' && env.BUILD_TYPE != 'package'
+        run: |
+          cd src/github.com/goharbor/harbor/src
+          echo "Running unit tests..."
+          go test -v -short -race -coverprofile=coverage.txt -covermode=atomic ./pkg/auditext/... ./controller/event/... 2>&1 | tee test_output.txt
+          echo "TEST_EXIT_CODE=${PIPESTATUS[0]}" >> $GITHUB_ENV
+
+      - name: Upload coverage
+        if: env.SKIP_TESTS != 'true' && env.BUILD_TYPE != 'package'
+        uses: codecov/codecov-action@v4
+        with:
+          files: src/github.com/goharbor/harbor/src/coverage.txt
+          fail_ci_if_error: false
+
+      - name: Compile binaries
+        if: env.BUILD_TYPE == 'compile' || env.BUILD_TYPE == 'all'
+        run: |
+          cd src/github.com/goharbor/harbor
+          echo "Compiling Harbor binaries..."
+          make compile -e GOBUILDTAGS="include_oss include_gcs"
+          echo "Compilation successful!"
+          ls -la Makefile
+
+      - name: Build Harbor images
+        if: env.BUILD_TYPE == 'all'
+        run: |
+          cd src/github.com/goharbor/harbor
+          echo "Building Harbor images..."
+          make build -e DEVFLAG=false
+          echo "Images built successfully!"
+          docker images | grep goharbor
+
+      - name: Build offline package
+        if: env.BUILD_TYPE == 'package' || env.BUILD_TYPE == 'all'
+        run: |
+          cd src/github.com/goharbor/harbor
+          echo "Building offline package..."
+          # Build base images first
+          make build_base -e BASEIMAGETAG=dev
+          # Build offline installer
+          sudo make package_offline \
+            -e GOBUILDTAGS="include_oss include_gcs" \
+            -e BASEIMAGETAG=dev \
+            -e VERSIONTAG=dev \
+            -e DEVFLAG=false \
+            -e TRIVYFLAG=true \
+            -e EXPORTERFLAG=true
+          echo "Package built successfully!"
+          ls -lh harbor-offline-installer-*.tgz
+
+      - name: Build online package
+        if: env.BUILD_TYPE == 'package' || env.BUILD_TYPE == 'all'
+        run: |
+          cd src/github.com/goharbor/harbor
+          echo "Building online package..."
+          sudo make package_online \
+            -e GOBUILDTAGS="include_oss include_gcs" \
+            -e BASEIMAGETAG=dev \
+            -e VERSIONTAG=dev \
+            -e DEVFLAG=false \
+            -e TRIVYFLAG=true \
+            -e EXPORTERFLAG=true
+          echo "Package built successfully!"
+          ls -lh harbor-online-installer-*.tgz
+
+      - name: Upload build artifacts
+        if: env.BUILD_TYPE == 'package' || env.BUILD_TYPE == 'all'
+        uses: actions/upload-artifact@v4
+        with:
+          name: harbor-packages
+          path: |
+            src/github.com/goharbor/harbor/harbor-offline-installer-*.tgz
+            src/github.com/goharbor/harbor/harbor-online-installer-*.tgz
+          retention-days: 7
+
+      - name: Upload test results
+        if: env.SKIP_TESTS != 'true' && env.BUILD_TYPE != 'package'
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: src/github.com/goharbor/harbor/src/test_output.txt
+          retention-days: 7
+
+      - name: Summary
+        run: |
+          echo ""
+          echo "=========================================="
+          echo "Build Summary"
+          echo "=========================================="
+          echo "Build Type: ${{ env.BUILD_TYPE }}"
+          echo "Skip Tests: ${{ env.SKIP_TESTS }}"
+          echo "Go Version: ${{ github.event.inputs.go_version || '1.23' }}"
+          echo "=========================================="
+          if [ "${{ env.TEST_EXIT_CODE }}" != "0" ] && [ "${{ env.SKIP_TESTS }}" != "true" ]; then
+            echo "❌ Unit tests failed!"
+            exit 1
+          else
+            echo "✅ Build completed successfully!"
+          fi

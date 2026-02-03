@@ -113,6 +113,7 @@ func (c *CommonEvent) ResolveToAuditLog() (*model.AuditLogExt, error) {
 		Resource:             c.ResourceName,
 		OperationDescription: c.OperationDescription,
 		IsSuccessful:         c.IsSuccessful,
+		SourceIP:             c.SourceIP,
 	}
 	return auditLog, nil
 }

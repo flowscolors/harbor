@@ -6968,6 +6968,9 @@ definitions:
         type: boolean
         x-omitempty: false
         description: the operation's result, true for success, false for fail
+      source_ip:
+        type: string
+        description: The source IP address of the operation.
       op_time:
         type: string
         format: date-time
